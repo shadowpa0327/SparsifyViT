@@ -1,5 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
+import os
 import argparse
 import datetime
 import numpy as np
@@ -33,6 +34,9 @@ import utils
 import wandb
 
 from sparsity_factory.pruners import weight_pruner_loader, prune_weights_reparam, check_valid_pruner
+from apex.contrib.sparsity import ASP
+os.environ['CUDA_VISIBLE_DEVICES'] = f'{1}'
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -184,10 +188,14 @@ def get_args_parser():
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
 
     # Sparsity Training Related Flag
-    parser.add_argument('--model', default='Sparse_deit_small_patch16_224', type=str, metavar='MODEL',
+    # timm==0.4.12
+    # python -m torch.distributed.launch --nproc_per_node=1 --use_env main.py --wandb
+    # parser.add_argument('--model', default='Sparse_deit_small_patch16_224', type=str, metavar='MODEL',
+    #                     help='Name of model to train')
+    parser.add_argument('--model', default='deit_small_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--nas-config', type=str, default='configs/deit_small_nxm_ea124_9.0M.yaml', help='configuration for supernet training')
-    parser.add_argument('--nas-mode', action='store_true', default=True)
+    parser.add_argument('--nas-mode', action='store_true', default=False)
     parser.add_argument('--nas-weights', default='weights/nas_pretrained.pth', help='load pretrained supernet weight')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--output_dir', default='result',
@@ -370,11 +378,20 @@ def main(args):
             resume='')
 
 
+    ## Add ASP to model (apex)
+    # one_ll = model.blocks[0].attn.proj.weight
+    # ASP.init_model_for_pruning(model, "m4n2_1d", whitelist=[torch.nn.Linear, torch.nn.Conv2d], allow_recompute_mask=True)
+    # # ASP.init_optimizer_for_pruning(optimizer)
+    # print("DENSE :: ", one_ll)
+    # ASP.compute_sparse_masks()
+    # print("SPARSE :: ", one_ll)
     
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
+
+
     if args.nas_mode:
         smallest_config = []
         for ratios in nas_config['sparsity']['choices']:
@@ -452,6 +469,9 @@ def main(args):
         test_stats = evaluate(data_loader_val, model, device)
         print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
         return
+
+    # Add ASP to model
+    ASP.prune_trained_model(model, optimizer)
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
