@@ -22,11 +22,21 @@ class SparseLinearSuper(nn.Module):
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = nn.Parameter(torch.ones(out_features, in_features))
-        if bias:
-            self.bias = nn.Parameter(torch.ones(out_features))
-        else:
-            self.bias = None
+        # self.weight = nn.Parameter(torch.ones(out_features, in_features))
+        # if bias:
+        #     self.bias = nn.Parameter(torch.ones(out_features))
+        # else:
+        #     self.bias = None
+        
+        self.sparsity_config_list = [(1, 4), (2, 4), (4, 4)]
+        self.weight_list = []
+        self.bias_list = []
+        for _ in self.sparsity_config_list:
+            self.weight_list.append(nn.Parameter(torch.ones(out_features, in_features)))
+            if bias:
+                self.bias_list.append(nn.Parameter(torch.ones(out_features)))
+            else:
+                self.bias_list.append(None)
         
         self.sparsity_config = (4, 4)
         self.mask = torch.ones_like(self.weight)
@@ -37,6 +47,10 @@ class SparseLinearSuper(nn.Module):
         self._set_mask()
         
     def _set_mask(self):
+        # Find the corresponding index
+        idx = self.sparsity_config_list.index(self.sparsity_config)
+        self.weight = self.weight_list[idx]
+        self.bias = self.bias_list[idx]
         n, m = self.sparsity_config
         self.mask = compute_mask(self.weight, n, m)
 
@@ -45,7 +59,7 @@ class SparseLinearSuper(nn.Module):
     
     def forward(self, x):
         weight = self.weight * self.mask
-        #weight = self.weight
+        # weight = self.weight
         if self.bias is not None:
             x = F.linear(x, weight, self.bias)
         else:
