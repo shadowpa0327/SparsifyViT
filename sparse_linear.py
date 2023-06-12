@@ -1,6 +1,34 @@
 import torch.nn as nn
+from torch import autograd
 import torch.nn.functional as F
 import torch
+
+class Sparse(autograd.Function): # from SR-STE
+    """" Prune the unimprotant weight for the forwards phase but pass the gradient to dense weight using SR-STE in the backwards phase"""
+
+    @staticmethod
+    def forward(ctx, weight, N, M, decay = 0.0002):
+        ctx.save_for_backward(weight)
+
+        output = weight.clone()
+        length = weight.numel()
+        group = int(length/M)
+
+        weight_temp = weight.detach().abs().reshape(group, M)
+        index = torch.argsort(weight_temp, dim=1)[:, :int(M-N)]
+
+        w_b = torch.ones(weight_temp.shape, device=weight_temp.device)
+        w_b = w_b.scatter_(dim=1, index=index, value=0).reshape(weight.shape)
+        ctx.mask = w_b
+        ctx.decay = decay
+        weight = output*w_b
+        ctx.mark_dirty(weight)
+        return weight
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        weight, = ctx.saved_tensors
+        return grad_output + ctx.decay * (1-ctx.mask) * weight, None, None
 
 def compute_mask(t, N, M):
     out_channel, in_channel = t.shape
@@ -69,9 +97,14 @@ class SparseLinearSuper(nn.Module):
 
     def __repr__(self):
         return f"SparseLinearSuper(in_features={self.in_features}, out_features={self.out_features}, sparse_config:{self.sparsity_config})"
-    
+   
+    def get_sparse_weights(self):
+        n, m = self.sparsity_config
+        return Sparse.apply(self.weight[self.sparsity_idx], n, m)    
+
     def forward(self, x):
-        weight = self.weight[self.sparsity_idx] * self.mask
+        weight = self.get_sparse_weights()
+        # weight = self.weight[self.sparsity_idx] * self.mask
         # weight = self.weight
         if self.bias[self.sparsity_idx] is not None:
             x = F.linear(x, weight, self.bias[self.sparsity_idx])
