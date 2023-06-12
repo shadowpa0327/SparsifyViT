@@ -69,11 +69,17 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
 
 @torch.no_grad()
-def evaluate(data_loader, model, device):
+def evaluate(nas_config, data_loader, model, device):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
+
+    # Sample the smallest subnetwork to test accuracy
+    smallest_config = []
+    for ratios in nas_config['sparsity']['choices']:
+        smallest_config.append(ratios[0])
+    model.module.set_sample_config(smallest_config)  
 
     # switch to evaluation mode
     model.eval()
