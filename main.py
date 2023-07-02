@@ -190,16 +190,9 @@ def get_args_parser():
     parser.add_argument('--model', default='Sparse_deit_small_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--pretrained', action='store_true', help='Use pretrained model')
-    parser.add_argument('--nas-config', type=str, default=None, help='configuration for supernet training')
     parser.add_argument('--nas-mode', action='store_true', default=False)
+    parser.add_argument('--nas-config', type=str, default=None, help='configuration for supernet training')
     parser.add_argument('--nas-test-config', type=int, nargs='+', default=None, help='Use test config to eval accuracy')
-    # parser.add_argument('--nas-weights', default='weights/nas_pretrained.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_nas_1:4_150epoch/checkpoint.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_sub_1:4_50epoch/best_checkpoint.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_sub_2:4_50epoch/best_checkpoint.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_nas_124+13_150epoch/checkpoint.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_nas_124+13_150epoch/best_checkpoint.pth', help='load pretrained supernet weight')
-    # parser.add_argument('--nas-weights', default='result_1:8_100epoch/best_checkpoint.pth', help='load pretrained supernet weight')
     parser.add_argument('--nas-weights', default=None, help='load pretrained supernet weight')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--output_dir', default='result',
@@ -244,7 +237,7 @@ def main(args):
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
 
-    if True:  # args.distributed:
+    if args.distributed:
         num_tasks = utils.get_world_size()
         global_rank = utils.get_rank()
         if args.repeated_aug:
@@ -280,7 +273,7 @@ def main(args):
 
     data_loader_val = torch.utils.data.DataLoader(
         dataset_val, sampler=sampler_val,
-        batch_size=int(1.5 * args.batch_size),
+        batch_size=args.batch_size * 2,
         num_workers=args.num_workers,
         pin_memory=args.pin_mem,
         drop_last=False
@@ -381,7 +374,10 @@ def main(args):
 
     model_without_ddp = model
     if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+        if 'seperate' in nas_config['sparsity']:
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+        else:
+            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
     if args.nas_mode:
@@ -481,13 +477,15 @@ def main(args):
     
     # Evaluate only
     if args.eval:
-        test_stats = evaluate(nas_config, args.nas_test_config, data_loader_val, model, device, args)
-        print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+        test_stats = evaluate(nas_config, data_loader_val, model, device, args)
+        nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+        for nas_test_config in nas_test_config_list:
+            print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
         return
 
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
-    max_accuracy = 0.0
+    max_accuracy = {'[1, 4]_acc1': 0.0, '[1, 3]_acc1': 0.0, '[2, 4]_acc1': 0.0, '[4, 4]_acc1': 0.0}
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
@@ -501,8 +499,8 @@ def main(args):
         )
 
         lr_scheduler.step(epoch)
-        if args.output_dir:
-            checkpoint_paths = [output_dir / 'checkpoint.pth']
+        if args.output_dir and (epoch % 5 == 0) or (epoch == args.epochs - 1):
+            checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
                     'model': model_without_ddp.state_dict(),
@@ -514,25 +512,28 @@ def main(args):
                 }, checkpoint_path)
 
 
-        test_stats = evaluate(nas_config, args.nas_test_config, data_loader_val, model, device, args)
+        test_stats = evaluate(nas_config, data_loader_val, model, device, args)
+        nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+        for nas_test_config in nas_test_config_list:
+            print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
 
-        print(f"Accuracy of the network on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+        for nas_test_config in nas_test_config_list:
+            if max_accuracy[f'{nas_test_config}_acc1'] < test_stats[f'{nas_test_config}_acc1']:
+                max_accuracy[f'{nas_test_config}_acc1'] = test_stats[f'{nas_test_config}_acc1']
+                if args.output_dir:
+                    checkpoint_paths = [output_dir / f'{nas_test_config}_best_checkpoint.pth']
+                    for checkpoint_path in checkpoint_paths:
+                        utils.save_on_master({
+                            'model': model_without_ddp.state_dict(),
+                            'optimizer': optimizer.state_dict(),
+                            'lr_scheduler': lr_scheduler.state_dict(),
+                            'epoch': epoch,
+                            'scaler': loss_scaler.state_dict(),
+                            'args': args,
+                        }, checkpoint_path)
 
-        if max_accuracy < test_stats["acc1"]:
-            max_accuracy = test_stats["acc1"]
-            if args.output_dir:
-                checkpoint_paths = [output_dir / 'best_checkpoint.pth']
-                for checkpoint_path in checkpoint_paths:
-                    utils.save_on_master({
-                        'model': model_without_ddp.state_dict(),
-                        'optimizer': optimizer.state_dict(),
-                        'lr_scheduler': lr_scheduler.state_dict(),
-                        'epoch': epoch,
-                        'scaler': loss_scaler.state_dict(),
-                        'args': args,
-                    }, checkpoint_path)
-
-        print(f'Max accuracy: {max_accuracy:.2f}%')
+            print('Accuracy of the {name} subnet Max accuracy: {max_accuracy:.3f}%'
+                  .format(name=nas_test_config, max_accuracy=max_accuracy[f'{nas_test_config}_acc1']))
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
                      **{f'test_{k}': v for k, v in test_stats.items()},

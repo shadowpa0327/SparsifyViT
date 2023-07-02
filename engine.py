@@ -69,46 +69,47 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
 
 
 @torch.no_grad()
-def evaluate(nas_config, nas_test_config, data_loader, model, device, args = None):
+def evaluate(nas_config, data_loader, model, device, args = None):
     criterion = torch.nn.CrossEntropyLoss()
 
     metric_logger = utils.MetricLogger(delimiter="  ")
     header = 'Test:'
 
-    if args.nas_mode:
-        # Sample the subnet to test accuracy
-        test_config = []
-        for ratios in nas_config['sparsity']['choices']:
-            if nas_test_config in ratios:
+    nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+
+    for nas_test_config in nas_test_config_list:
+        print(f'Test config {nas_test_config} now!')
+        if args.nas_mode:
+            # Sample the subnet to test accuracy
+            test_config = []
+            for ratios in nas_config['sparsity']['choices']:
                 test_config.append(nas_test_config)
-            else: 
-                # choose smallest_config
-                test_config.append(ratios[0])
-                print(f'Test config {nas_test_config} is not in the choices, choose smallest config {ratios[0]}')
-        
-        model.module.set_sample_config(test_config)  
+            
+            model.module.set_sample_config(test_config)  
 
-    # switch to evaluation mode  
-    model.eval()
+        # switch to evaluation mode
+        model.eval()
 
-    for images, target in metric_logger.log_every(data_loader, 10, header):
-        images = images.to(device, non_blocking=True)
-        target = target.to(device, non_blocking=True)
+        for images, target in metric_logger.log_every(data_loader, 10, header):
+            images = images.to(device, non_blocking=True)
+            target = target.to(device, non_blocking=True)
 
-        # compute output
-        with torch.cuda.amp.autocast():
-            output = model(images)
-            loss = criterion(output, target)
+            # compute output
+            with torch.cuda.amp.autocast():
+                output = model(images)
+                loss = criterion(output, target)
 
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
-        batch_size = images.shape[0]
-        metric_logger.update(loss=loss.item())
-        metric_logger.meters['acc1'].update(acc1.item(), n=batch_size)
-        metric_logger.meters['acc5'].update(acc5.item(), n=batch_size)
-    # gather the stats from all processes
-    metric_logger.synchronize_between_processes()
-    print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
-          .format(top1=metric_logger.acc1, top5=metric_logger.acc5, losses=metric_logger.loss))
+            batch_size = images.shape[0]
+            # metric_logger.update(loss=loss.item())
+            metric_logger.meters[f'{nas_test_config}_loss'].update(loss.item(), n=batch_size)
+            metric_logger.meters[f'{nas_test_config}_acc1'].update(acc1.item(), n=batch_size)
+            metric_logger.meters[f'{nas_test_config}_acc5'].update(acc5.item(), n=batch_size)
+        # gather the stats from all processes
+        metric_logger.synchronize_between_processes()
+        print('{name}: * Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+            .format(name=nas_test_config, top1=metric_logger.meters[f'{nas_test_config}_acc1'], 
+                    top5=metric_logger.meters[f'{nas_test_config}_acc5'], losses=metric_logger.meters[f'{nas_test_config}_loss']))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
