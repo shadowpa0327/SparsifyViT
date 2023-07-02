@@ -4,6 +4,11 @@ This reposity contains the PyTorch training code for the original DeiT models. C
 
 Here, I have build an interface and add some naive methods for add sparsity into the ViT.
 
+
+## Some warning !
+- Now we can't not support non-uniform subnet (maybe find by EA) evaluate & finetuned
+
+
 ## Sparsity NAS Training scripts
 - Normal command
     - training
@@ -14,24 +19,26 @@ Here, I have build an interface and add some naive methods for add sparsity into
         --epochs 150 \
         --batch-size 128 \
         --pretrained \
-        --lr 5e-5 \ 
+        --lr 5e-5 \
         --min-lr 1e-6 \
         --nas-mode \
         --nas-config configs/deit_small_nxm_uniform24.yaml \
         --nas-test-config 2 4 \
         --output_dir nas_uniform_24_150epoch \
+        --dist-eval \
         --wandb
         ```
     - eval 
         ```
         python -m torch.distributed.launch --master_port 29510 --nproc_per_node=2 --use_env main.py \
-        --model Sparse_deit_small_patch16_224
+        --model Sparse_deit_small_patch16_224 \
         --data-path /dataset/imagenet \
         --nas-mode \
         --nas-config configs/deit_small_nxm_uniform24.yaml \
         --nas-weights nas_uniform_24_150epoch/best_checkpoint.pth \
         --nas-test-config 2 4 \
-        --eval
+        --eval \
+        --dist-eval
         ```
 - KD command
     - training
@@ -42,7 +49,7 @@ Here, I have build an interface and add some naive methods for add sparsity into
         --epochs 150 \
         --batch-size 128 \
         --pretrained \\
-        --lr 5e-5 \ 
+        --lr 5e-5 \
         --min-lr 1e-6 \
         --nas-mode \
         --nas-config configs/deit_small_nxm_nas_1234.yaml \
@@ -51,18 +58,20 @@ Here, I have build an interface and add some naive methods for add sparsity into
         --teacher-model deit_small_patch16_224 \
         --distillation-type soft \
         --distillation-alpha 1.0 \
+        --dist-eval \
         --wandb
         ```
     - eval 
         ```
         python -m torch.distributed.launch --master_port 29510 --nproc_per_node=2 --use_env main.py \
-        --model Sparse_deit_small_patch16_224
+        --model Sparse_deit_small_patch16_224 \
         --data-path /dataset/imagenet \
         --nas-mode \
         --nas-config configs/deit_small_nxm_uniform24.yaml \
         --nas-weights KD_nas_124+13_150epoch/checkpoint.pth \
         --nas-test-config 2 4 \
-        --eval
+        --eval \
+        --dist-eval
         ```
 - Cifar-100 command
     - training
@@ -101,7 +110,7 @@ User can create a `yaml` file the descibe the detail and pass into the main func
 ## Example Usage (Pruning method)
 To run a DeiT-S with custom configuration and eval the accuracy before finetuning
 ```
-python main.py \ 
+python main.py \
 --model deit_small_patch16_224 \
 --data-path [Path to imagenet] \
 --output_dir [Path to output directory] \
@@ -112,7 +121,7 @@ python main.py \
 
 To finetune the DeiT-S with custom configuration
 ```
-python main.py \ 
+python main.py \
 --model deit_small_patch16_224 \
 --data-path [Path to imagenet] \
 --output_dir [Path to output directory] \
@@ -123,7 +132,7 @@ python main.py \
 
 To use the algorithm to calculate the layer-sparsity and finetune given the global target sparsity to be 65%
 ```
-python main.py \ 
+python main.py \
 --model deit_small_patch16_224 \
 --data-path [Path to imagenet] \
 --output_dir [Path to output directory] \
