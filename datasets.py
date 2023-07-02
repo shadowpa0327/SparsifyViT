@@ -78,6 +78,8 @@ def build_dataset(is_train, args):
 
 def build_transform(is_train, args):
     resize_im = args.input_size > 32
+    # Fix torchvision.transforms resize warning
+    args.train_interpolation = InterpolationMode.BICUBIC if args.train_interpolation == 'bicubic' else args.train_interpolation
     if is_train:
         # this should always dispatch to transforms_imagenet_train
         transform = create_transform(
