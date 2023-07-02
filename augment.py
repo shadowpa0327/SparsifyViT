@@ -13,6 +13,7 @@ from timm.data.transforms import _pil_interp, RandomResizedCropAndInterpolation,
 
 import numpy as np
 from torchvision import datasets, transforms
+from torchvision.transforms import InterpolationMode
 import random
 
 
@@ -96,7 +97,7 @@ def new_data_aug_generator(args = None):
     interpolation='bicubic'
     if remove_random_resized_crop:
         primary_tfl = [
-            transforms.Resize(img_size, interpolation=3),
+            transforms.Resize(img_size, interpolation=InterpolationMode.BICUBIC),
             transforms.RandomCrop(img_size, padding=4,padding_mode='reflect'),
             transforms.RandomHorizontalFlip()
         ]

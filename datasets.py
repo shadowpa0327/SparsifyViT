@@ -5,6 +5,7 @@ import json
 
 from torchvision import datasets, transforms
 from torchvision.datasets.folder import ImageFolder, default_loader
+from torchvision.transforms import InterpolationMode
 
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import create_transform
@@ -100,7 +101,7 @@ def build_transform(is_train, args):
     if resize_im:
         size = int(args.input_size / args.eval_crop_ratio)
         t.append(
-            transforms.Resize(size, interpolation=3),  # to maintain same ratio w.r.t. 224 images
+            transforms.Resize(size, interpolation=InterpolationMode.BICUBIC),  # to maintain same ratio w.r.t. 224 images
         )
         t.append(transforms.CenterCrop(args.input_size))
 
