@@ -8,8 +8,8 @@ Here, I have build an interface and add some naive methods for add sparsity into
 ## Some warning !
 - Now we can't not support non-uniform subnet (maybe find by EA) evaluate & finetuned
 
-
 ## Sparsity NAS Training scripts
+- Use CUDA_VISIBLE_DEVICES=0,1,2,3 to choose which GPUs to run
 - Normal command
     - training
         ```
