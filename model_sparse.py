@@ -92,6 +92,9 @@ class LRMlpSuper(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
+        self.in_features = in_features
+        self.hidden_features = hidden_features
+        self.output_features = out_features
         self.act = act_layer()
         self.drop = nn.Dropout(drop)
         self.fc1 = SparseLinearSuper(in_features, hidden_features)
@@ -104,6 +107,14 @@ class LRMlpSuper(nn.Module):
         x = self.fc2(x)
         x = self.drop(x)
         return x
+    
+    def flops(self, L):
+        flops = 0
+        # fc1
+        flops += L * self.in_features * self.hidden_features * self.fc1.get_sparse_level()
+        # fc2
+        flops += L * self.hidden_features * self.output_features * self.fc2.get_sparse_level()
+        return flops
 
 class LRAttentionSuper(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, attn_drop=0., proj_drop=0.):
@@ -111,7 +122,7 @@ class LRAttentionSuper(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = head_dim ** -0.5
-
+        self.dim = dim
         self.proj = SparseLinearSuper(dim, dim)
         self.qkv = SparseLinearSuper(dim, dim * 3, bias = qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
@@ -131,11 +142,26 @@ class LRAttentionSuper(nn.Module):
         x = self.proj_drop(x)
         return x
 
+    def flops(self, L):
+        flops = 0
+        # qkv embedding
+        flops += L * self.dim * self.dim * 3 * self.qkv.get_sparse_level()
+        # calculate attn matrix
+        flops += self.num_heads * L * (self.dim // self.num_heads) * L
+        # attn @ v
+        flops += self.num_heads * L * L * (self.dim // self.num_heads)
+        # proj
+        flops += L * self.dim * self.dim * self.proj.get_sparse_level()
+        return flops
+        
+
+    
 class Block(nn.Module):
 
     def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, drop=0., attn_drop=0.,
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm):
         super().__init__()
+        self.dim = dim
         self.norm1 = norm_layer(dim)
         self.attn = LRAttentionSuper(dim, num_heads=num_heads, qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop, )
         # NOTE: drop path for stochastic depth, we shall see if this is better than dropout here
@@ -148,6 +174,21 @@ class Block(nn.Module):
         x = x + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
+    
+    def flops(self, L):
+        flops = 0
+        # norm1
+        flops += L * self.dim
+        # attn
+        flops += self.attn.flops(L)
+        # mlp
+        flops += self.mlp.flops(L)
+        # norm2
+        flops += self.dim * L
+        return flops
+        
+        
+        
 
     
     
@@ -158,11 +199,14 @@ class PatchEmbed(nn.Module):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
+        patches_resolution = [img_size[0] // patch_size[0], img_size[1] // patch_size[1]]
         num_patches = (img_size[1] // patch_size[1]) * (img_size[0] // patch_size[0])
         self.img_size = img_size
         self.patch_size = patch_size
+        self.patches_resolution = patches_resolution
         self.num_patches = num_patches
-
+        self.embed_dim = embed_dim
+        self.in_chans = in_chans
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
     def forward(self, x):
@@ -172,9 +216,11 @@ class PatchEmbed(nn.Module):
             f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
         x = self.proj(x).flatten(2).transpose(1, 2)
         return x
-    
-    def num_params(self):
-        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+    def flops(self):
+        Ho, Wo = self.patches_resolution
+        flops = Ho * Wo * self.embed_dim * self.in_chans * (self.patch_size[0] * self.patch_size[1])
+        return flops
 
 
 
@@ -226,6 +272,8 @@ class SparseVisionTransformer(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + self.num_tokens, embed_dim))
         self.pos_drop = nn.Dropout(p=drop_rate)
 
+        self.total_patches = num_patches + self.num_tokens
+        
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         self.blocks = nn.Sequential(*[
             Block(
@@ -317,6 +365,19 @@ class SparseVisionTransformer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad) - pruned_params
 
 
+    
+    def flops(self):
+        flops = 0
+        flops += self.patch_embed.flops()
+        
+        for block in self.blocks:
+            flops += block.flops(self.total_patches)
+        
+        # final norm
+        flops += self.num_features * self.num_tokens
+        # classification head
+        flops += self.num_features * self.num_classes
+        return flops
 
 
 
@@ -373,7 +434,6 @@ def Sparse_deit_tiny_patch16_224(pretrained=False, **kwargs):
         )
         model.load_state_dict(checkpoint["model"])
     return model
-
 
 
 

@@ -77,6 +77,10 @@ class SparseLinearSuper(nn.Module):
 
         return x
     
+    def get_sparse_level(self):
+        n, m = self.sparsity_config
+        return (n / m)
+    
     def num_pruned_params(self):
         if self.mask.size() == self.weight.size():
             return int(torch.sum(self.mask==0).item())
