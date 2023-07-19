@@ -389,7 +389,7 @@ def main(args):
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
 
-    
+
 
 
     model_without_ddp = model
