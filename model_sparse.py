@@ -365,6 +365,9 @@ class SparseVisionTransformer(nn.Module):
         return sum(p.numel() for p in self.parameters() if p.requires_grad) - pruned_params
 
 
+    def set_indep_per_cand_affine(self, all_sparse_choices):
+        for sparse_choices, layer in zip(all_sparse_choices, filter(lambda x: isinstance(x, SparseLinearSuper), self.modules())):
+            layer.set_indeped_affine(sparse_choices)
     
     def flops(self):
         flops = 0

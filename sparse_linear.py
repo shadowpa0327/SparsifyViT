@@ -17,6 +17,19 @@ def compute_mask(t, N, M):
     
     return mask_reshaped.reshape(out_channel, in_channel)
 
+class Affine(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+        self.alpha = nn.Parameter(torch.ones(dim))
+        self.beta = nn.Parameter(torch.zeros(dim))
+
+    def forward(self, x):
+        return self.alpha * x + self.beta 
+    
+    def __repr__(self):
+        return f"Affine(dim={self.dim})"
+
 class SparseLinearSuper(nn.Module):
     def __init__(self, in_features, out_features, bias=True):
         super().__init__()
@@ -33,7 +46,9 @@ class SparseLinearSuper(nn.Module):
         self.nas_config_list = ['no_separate']
         self.mask = torch.ones_like(self.weight)
         self.set_sample_config(self.sparsity_config)
-
+        self.per_candidate_affine_modules = None
+        
+        
     def set_seperate_config(self, seperate_configs): 
         # supernet training: used after loading pre-trained weights; ea: used before loading nas weights
         if seperate_configs:
@@ -43,6 +58,16 @@ class SparseLinearSuper(nn.Module):
             if self.bias != None:
                 self.bias = nn.Parameter(self.bias.repeat(len(self.nas_config_list), 1))
 
+    def set_indeped_affine(self, candidate_configs):
+        module_dict = {}
+        for sparsity_cfg in candidate_configs:
+            assert isinstance(sparsity_cfg, (tuple, list)) and len(sparsity_cfg) == 2
+            n, m = sparsity_cfg
+            module_dict[f"n{n}_m{m}"] = Affine(self.out_features)
+        
+        self.per_candidate_affine_modules = nn.ModuleDict(module_dict)
+        
+    
     def set_sample_config(self, sample_config):
         self.sparsity_config = sample_config
         self._set_mask()
@@ -59,7 +84,12 @@ class SparseLinearSuper(nn.Module):
             self.mask = compute_mask(self.weight[self.sparsity_idx], n, m)
 
     def __repr__(self):
-        return f"SparseLinearSuper(in_features={self.in_features}, out_features={self.out_features}, sparse_config:{self.sparsity_config})"
+        info = f"SparseLinearSuper(in_features={self.in_features}, out_features={self.out_features}, sparse_config:{self.sparsity_config}, \
+per_choices_affine:{self.per_candidate_affine_modules is not None})"
+        if self.per_candidate_affine_modules is not None:
+            for name, affine_module in self.per_candidate_affine_modules.items():
+                info+=f"\n  ({name}): {affine_module.__repr__()}"
+        return info
     
     def forward(self, x):
         if len(self.nas_config_list) == 1: # No seperate
@@ -74,7 +104,11 @@ class SparseLinearSuper(nn.Module):
                 x = F.linear(x, weight, self.bias[self.sparsity_idx])
         else:
             x = F.linear(x, weight)
-
+        
+        if self.per_candidate_affine_modules is not None:
+            cur_n, cur_m = self.sparsity_config
+            x = self.per_candidate_affine_modules[f"n{cur_n}_m{cur_m}"](x)
+        
         return x
     
     def get_sparse_level(self):
@@ -86,6 +120,8 @@ class SparseLinearSuper(nn.Module):
             return int(torch.sum(self.mask==0).item())
         else:
             return int(torch.sum(self.mask==0).item()) + self.weight[0].numel() * (len(self.nas_config_list) - 1)
+
+
 
 
 if __name__ == '__main__':
