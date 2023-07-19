@@ -390,8 +390,6 @@ def main(args):
             resume='')
 
 
-
-
     model_without_ddp = model
     if args.distributed:
         if 'seperate' in nas_config['sparsity'] or 'per_cand_affine' in nas_config['sparsity']:
