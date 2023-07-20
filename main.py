@@ -400,10 +400,6 @@ def main(args):
         model_without_ddp = model.module
 
     if args.nas_mode:
-        if 'seperate' in nas_config['sparsity']:
-            print('Set seperate weight !')
-            model_without_ddp.set_seperate_config(nas_config['sparsity']['seperate'])
-
         smallest_config = []
         for ratios in nas_config['sparsity']['choices']:
             smallest_config.append(ratios[0])
