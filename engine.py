@@ -76,15 +76,21 @@ def evaluate(nas_config, data_loader, model, device, args = None):
     header = 'Test:'
 
     nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
-
+    if args.subnet:
+        nas_test_config_list = [args.subnet]
+    
+    
     for nas_test_config in nas_test_config_list:
         print(f'Test config {nas_test_config} now!')
         if args.nas_mode:
             # Sample the subnet to test accuracy
             test_config = []
             for ratios in nas_config['sparsity']['choices']:
-                test_config.append(nas_test_config)
-            
+                if args.subnet:
+                    test_config.append(ratios[0])
+                else:
+                    test_config.append(nas_test_config)
+
             model.module.set_sample_config(test_config)  
 
         # switch to evaluation mode
@@ -105,11 +111,14 @@ def evaluate(nas_config, data_loader, model, device, args = None):
             # metric_logger.update(loss=loss.item())
             metric_logger.meters[f'{nas_test_config}_loss'].update(loss.item(), n=batch_size)
             metric_logger.meters[f'{nas_test_config}_acc1'].update(acc1.item(), n=batch_size)
-            metric_logger.meters[f'{nas_test_config}_acc5'].update(acc5.item(), n=batch_size)
+            # metric_logger.meters[f'{nas_test_config}_acc5'].update(acc5.item(), n=batch_size)
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
-        print('{name}: * Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+        # print('{name}: * Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f} loss {losses.global_avg:.3f}'
+        #     .format(name=nas_test_config, top1=metric_logger.meters[f'{nas_test_config}_acc1'], 
+        #             top5=metric_logger.meters[f'{nas_test_config}_acc5'], losses=metric_logger.meters[f'{nas_test_config}_loss']))
+        print('{name}: * Acc {top1.global_avg:.3f} loss {losses.global_avg:.3f}'
             .format(name=nas_test_config, top1=metric_logger.meters[f'{nas_test_config}_acc1'], 
-                    top5=metric_logger.meters[f'{nas_test_config}_acc5'], losses=metric_logger.meters[f'{nas_test_config}_loss']))
+                    losses=metric_logger.meters[f'{nas_test_config}_loss']))
 
     return {k: meter.global_avg for k, meter in metric_logger.meters.items()}

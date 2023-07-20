@@ -193,6 +193,7 @@ def get_args_parser():
     parser.add_argument('--nas-mode', action='store_true', default=False)
     parser.add_argument('--nas-config', type=str, default=None, help='configuration for supernet training')
     parser.add_argument('--nas-test-config', type=int, nargs='+', default=None, help='Use test config to eval accuracy')
+    parser.add_argument('--subnet', default=None, help='Finetune subnet')
     parser.add_argument('--nas-weights', default=None, help='load pretrained supernet weight')
     parser.add_argument('--wandb', action='store_true')
     parser.add_argument('--output_dir', default='result',
@@ -479,6 +480,8 @@ def main(args):
     if args.eval:
         test_stats = evaluate(nas_config, data_loader_val, model, device, args)
         nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+        if args.subnet:
+            nas_test_config_list = [args.subnet]
         for nas_test_config in nas_test_config_list:
             print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
         return
@@ -486,6 +489,9 @@ def main(args):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     max_accuracy = {'[1, 4]_acc1': 0.0, '[1, 3]_acc1': 0.0, '[2, 4]_acc1': 0.0, '[4, 4]_acc1': 0.0}
+    if args.subnet:
+        max_accuracy = {f'{args.subnet}_acc1': 0.0}
+    # print(max_accuracy)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
@@ -514,6 +520,8 @@ def main(args):
 
         test_stats = evaluate(nas_config, data_loader_val, model, device, args)
         nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+        if args.subnet:
+            nas_test_config_list = [args.subnet]
         for nas_test_config in nas_test_config_list:
             print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
 
