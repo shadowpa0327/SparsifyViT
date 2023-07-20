@@ -34,6 +34,9 @@ import wandb
 
 from sparsity_factory.pruners import weight_pruner_loader, prune_weights_reparam, check_valid_pruner
 
+import warnings
+warnings.simplefilter('ignore')
+
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
     parser.add_argument('--batch-size', default=128, type=int)
@@ -287,9 +290,14 @@ def main(args):
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
-    
-    with open(args.nas_config) as f:
-        nas_config = yaml.load(f, Loader=SafeLoader)  
+    if args.nas_mode:
+        if args.nas_config:
+            with open(args.nas_config) as f:
+                nas_config = yaml.load(f, Loader=SafeLoader) 
+        else:
+            raise ValueError("Please provide the nas config when you are running in nas mode")
+    else:
+        nas_config = None
     
     print(f"Creating model: {args.model}")
     model = create_model(
@@ -361,6 +369,16 @@ def main(args):
         except:
             print('no patch embed')
 
+    if args.nas_mode:
+        if 'seperate' in nas_config['sparsity']:
+            print('Set seperate weight !')
+            model.set_seperate_config(nas_config['sparsity']['seperate'])
+        
+        if 'per_cand_affine' in nas_config['sparsity']:
+            print('Build affine module for each candidate block')
+            model.set_indep_per_cand_affine(nas_config['sparsity']['choices'])
+            print(model)
+    
     model.to(device)
 
     model_ema = None
@@ -375,7 +393,7 @@ def main(args):
 
     model_without_ddp = model
     if args.distributed:
-        if 'seperate' in nas_config['sparsity']:
+        if 'seperate' in nas_config['sparsity'] or 'per_cand_affine' in nas_config['sparsity']:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         else:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
@@ -385,10 +403,11 @@ def main(args):
         if 'seperate' in nas_config['sparsity']:
             print('Set seperate weight !')
             model_without_ddp.set_seperate_config(nas_config['sparsity']['seperate'])
-        
+
         smallest_config = []
         for ratios in nas_config['sparsity']['choices']:
             smallest_config.append(ratios[0])
+        
         model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
         model_without_ddp.set_sample_config(smallest_config)    
         
