@@ -8,6 +8,25 @@ Here, I have build an interface and add some naive methods for add sparsity into
 ## Some warning !
 - Now we can't not support non-uniform subnet (maybe find by EA) evaluate & finetuned
 
+## SubNet finetuned command
+python -m torch.distributed.launch --master_port 29515 --nproc_per_node=8 --use_env main.py \
+--model Sparse_deit_small_patch16_224 \
+--data-path /dev/shm/imagenet \
+--epochs 50 \
+--batch-size 128 \
+--lr 5e-6 \
+--min-lr 1e-6 \
+--nas-mode \
+--nas-weights KD_nas_124+13_150epoch_round2/best_checkpoint.pth \
+--nas-config configs/kd_ea_7.85M.yaml \
+--teacher-model deit_small_patch16_224 \
+--distillation-type soft \
+--distillation-alpha 1.0 \
+--output_dir KD_ea_7.85M_50epoch \
+--subnet kd_ea_7.85M \
+--dist-eval \
+--wandb
+
 ## Sparsity NAS Training scripts
 - Use CUDA_VISIBLE_DEVICES=0,1,2,3 to choose which GPUs to run
 - Normal command
