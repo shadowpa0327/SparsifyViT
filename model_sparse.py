@@ -352,12 +352,31 @@ class SparseVisionTransformer(nn.Module):
         for ratio, layer in zip(sparse_configs, filter(lambda x: isinstance(x, SparseLinearSuper), self.modules())):
             layer.set_sample_config(ratio)
 
+    def register_largest_and_smallest_config(self, all_sparse_choices):
+        largest_config = []
+        smallest_config = []
+        for sparse_choices in all_sparse_choices:
+            largest_config.append(sparse_choices[-1])
+            smallest_config.append(sparse_choices[0])
+        self.largest_config = largest_config
+        self.smallest_config = smallest_config
+        
+    def set_smallest_config(self):
+        self.set_sample_config(self.smallest_config)
+    
+    def set_largest_config(self):
+        self.set_sample_config(self.largest_config)
+    
+
     def set_random_config_fn(self, fn):
         self.random_config_fn = fn
 
     def set_random_sample_config(self):
         self.set_sample_config(self.random_config_fn())
 
+    def get_random_sample_config(self):
+        return self.random_config_fn()
+        
     def num_params(self):
         pruned_params= 0
         for layer in filter(lambda x: isinstance(x, SparseLinearSuper), self.modules()):
