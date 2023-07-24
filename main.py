@@ -470,14 +470,14 @@ def main(args):
         #     global_pool='avg',
         # )
         teacher_model = create_model( # deit-small
-        args.teacher_model,
-        pretrained=True,
-        num_classes=args.nb_classes,
-        drop_rate=args.drop,
-        drop_path_rate=args.drop_path,
-        drop_block_rate=None,
-        img_size=args.input_size
-    )
+            args.teacher_model,
+            pretrained=True,
+            num_classes=args.nb_classes,
+            drop_rate=args.drop,
+            drop_path_rate=args.drop_path,
+            drop_block_rate=None,
+            img_size=args.input_size
+        )
         if args.teacher_path:
             if args.teacher_path.startswith('https'):
                 checkpoint = torch.hub.load_state_dict_from_url(
@@ -494,6 +494,11 @@ def main(args):
         criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau, args.distillation_gamma
     )
 
+    if args.nas_mode and 'greedy' in nas_config['sparsity']:
+        cand_pool = build_candidate_pool(args, nas_config['sparsity']['greedy'])
+    else:
+        cand_pool = None
+        
     output_dir = Path(args.output_dir)
     if args.resume:
         if args.resume.startswith('https'):
@@ -510,6 +515,10 @@ def main(args):
                 utils._load_checkpoint_for_ema(model_ema, checkpoint['model_ema'])
             if 'scaler' in checkpoint:
                 loss_scaler.load_state_dict(checkpoint['scaler'])
+    
+        if 'cand_pool' in checkpoint and cand_pool is not None:
+            cand_pool.load_state_dict(checkpoint['cand_pool'])
+        
         lr_scheduler.step(args.start_epoch)
     
     # Evaluate only
@@ -531,10 +540,10 @@ def main(args):
         max_accuracy = {f'{args.subnet}_acc1': 0.0}
     
     if args.nas_mode and 'greedy' in nas_config['sparsity']:
-        cand_pool = build_candidate_pool(args, nas_config['sparsity']['greedy'])
         epsilon_scheduler = LinearEpsilonScheduler(total_epochs = args.epochs,
                                                    min_eps = nas_config['sparsity']['greedy']['eps_min'],
                                                    max_eps = nas_config['sparsity']['greedy']['eps_max'])
+
     
     
     for epoch in range(args.start_epoch, args.epochs):
@@ -577,6 +586,7 @@ def main(args):
                     'epoch': epoch,
                     'scaler': loss_scaler.state_dict(),
                     'args': args,
+                    'candidate_pools' : cand_pool.state_dict() if cand_pool is not None else None
                 }, checkpoint_path)
 
 
@@ -600,6 +610,7 @@ def main(args):
                             'epoch': epoch,
                             'scaler': loss_scaler.state_dict(),
                             'args': args,
+                            'candidate_pools' : cand_pool.state_dict() if cand_pool is not None else None
                         }, checkpoint_path)
 
             print('Accuracy of the {name} subnet Max accuracy: {max_accuracy:.3f}%'
@@ -632,14 +643,3 @@ if __name__ == '__main__':
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
 
-
-"""
-python -m torch.distributed.launch \
---nproc_per_node=1 \
---use_env \
---master_port 29501 \
-main.py \
---nas-config configs/deit_small_nxm_nas_124+13.yaml \
---data-path /work/shadowpa0327/imagenet \
---distillation-type soft_fd 
-"""

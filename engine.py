@@ -83,7 +83,7 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
     header = 'Epoch: [{}]'.format(epoch)
     print_freq = 10
     
-    # get the flops of uncompressed model and smallest models
+    # get the flops of uncompressed model and smallest models, for normalization purpose
     model.module.set_largest_config()
     largest_flops = model.module.flops() / 1e9
     model.module.set_smallest_config()
@@ -100,7 +100,6 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
     proxy_samples = torch.cat(proxy_samples, dim = 0).to(device, non_blocking=True)
     proxy_targets = torch.cat(proxy_targets, dim = 0).to(device, non_blocking=True)
     
-    #proxy_samples = torch.cat([batch] for batch_ )
 
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
         samples = samples.to(device, non_blocking=True)
@@ -116,54 +115,32 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
         step I. 
         Sample the subnetwork using epsilon greedy rules
         '''
-        # 1.A get `num_subnets` sub-networks
-        #candidate_subnets = []
         candidate_subnets_with_scores = []
         for i in range(num_subnets):
             if random.random() < epsilon: # get from candidate pools
                 subnet = cand_pool.get_one_subnet()
             else:
                 subnet = model.module.get_random_sample_config()
-            #candidate_subnets.append(subnet)
-        
-        #subnet_losses = [0.0 for _ in range(num_subnets)]
-        # 1.B ranking the subnetworks
-        #for proxy_samples, proxy_targets in data_loader_proxy:
-        #    proxy_samples = proxy_samples.to(device, non_blocking=True)
-        #    proxy_targets = proxy_targets.to(device, non_blocking=True)
 
-            
-        #for i, subnet in enumerate(candidate_subnets):
             with torch.no_grad():
                 # set the configuration of subnetwork
                 model.module.set_sample_config(subnet)
-                #proxy_loss = 0.0
-                # loop over proxy data loader to calculate loss
-                #print(len(data_loader_proxy))
-                # for proxy_samples, proxy_targets in  data_loader_proxy:
-                #     proxy_samples = proxy_samples.to(device, non_blocking=True)
-                #     proxy_targets = proxy_targets.to(device, non_blocking=True)
-
+                # inference
                 with torch.cuda.amp.autocast():
                     output = model(proxy_samples)
                     proxy_loss = proxy_criterion(output, proxy_targets)
                 proxy_loss = proxy_loss.item()
-                
-                
-                #print(f"rank:{dist.get_rank()}, proxy_loss_before: {proxy_loss}")
-                # 1.C Synchronization and calculate the metric with respect to flops
+        
+                # Synchronization and calculate the metric with respect to flops
                 t = torch.tensor([proxy_loss], device = 'cuda')
                 dist.barrier()
                 dist.all_reduce(t)
                 proxy_losses  = t.tolist()[0]
-                #print(f"rank:{dist.get_rank()}, proxy_loss_after: {proxy_losses}")
-        #for i, (subnet, proxy_losses) in enumerate(zip(candidate_subnets, subnet_losses)):
-                #model.module.set_sample_config(subnet)
+                
+                # calulate score
                 flops = model.module.flops() / 1e9 
                 normalized_flops = (flops - smallest_flops) / (largest_flops - smallest_flops) # min-max normalization
-                #print(normalized_flops)
                 proxy_scores = proxy_metrics(proxy_losses, normalized_flops)
-                #print("Proxy score:", proxy_scores)
                 candidate_subnets_with_scores.append((subnet, proxy_scores))
         '''
         step II. 
