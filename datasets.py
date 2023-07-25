@@ -2,14 +2,14 @@
 # All rights reserved.
 import os
 import json
-
+import torch
 from torchvision import datasets, transforms
 from torchvision.datasets.folder import ImageFolder, default_loader
 from torchvision.transforms import InterpolationMode
 
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import create_transform
-
+import random
 
 class INatDataset(ImageFolder):
     def __init__(self, root, train=True, year=2018, transform=None, target_transform=None,
@@ -54,7 +54,7 @@ class INatDataset(ImageFolder):
     # __getitem__ and __len__ inherited from ImageFolder
 
 
-def build_dataset(is_train, args):
+def build_dataset(is_train, args, is_proxy = False, image_per_classes = 1):
     transform = build_transform(is_train, args)
 
     if args.data_set == 'CIFAR':
@@ -64,6 +64,22 @@ def build_dataset(is_train, args):
         root = os.path.join(args.data_path, 'train' if is_train else 'val')
         dataset = datasets.ImageFolder(root, transform=transform)
         nb_classes = 1000
+        
+        if is_proxy: # create dataset with 1 image per classes
+            # Create a list to store the selected indices, one per class
+            selected_indices = []
+
+            # Loop through the dataset and randomly select 'images_per_class' image indices per class
+            for target in range(nb_classes):
+                class_indices = [i for i, (img_path, tgt) in enumerate(dataset.samples) if tgt == target]
+                #selected_indices.extend(random.sample(class_indices, min(image_per_classes, len(class_indices))))
+                
+                #FIXME (bria1009) For simplicity, we directly select the first `image_per_classes` images of each classes,
+                # to make sure that all process get the same data.
+                selected_indices.extend(class_indices[:image_per_classes])
+            # Create a subset of the dataset using the selected indices
+            dataset = torch.utils.data.Subset(dataset, torch.tensor(selected_indices))
+        
     elif args.data_set == 'INAT':
         dataset = INatDataset(args.data_path, train=is_train, year=2018,
                               category=args.inat_category, transform=transform)
