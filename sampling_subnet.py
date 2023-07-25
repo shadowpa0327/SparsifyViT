@@ -1,5 +1,6 @@
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
+import os
 import argparse
 import datetime
 import numpy as np
@@ -17,7 +18,7 @@ from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
 from timm.scheduler import create_scheduler
 from timm.optim import create_optimizer
-from timm.utils import NativeScaler, get_state_dict, ModelEma
+from timm.utils import NativeScaler, ModelEma
 
 from datasets import build_dataset
 from engine import train_one_epoch, evaluate
@@ -32,10 +33,9 @@ import random
 import utils
 import wandb
 
-from sparsity_factory.pruners import weight_pruner_loader, prune_weights_reparam, check_valid_pruner
-
 import warnings
 warnings.simplefilter('ignore')
+
 
 def get_args_parser():
     parser = argparse.ArgumentParser('DeiT training and evaluation script', add_help=False)
@@ -197,8 +197,11 @@ def get_args_parser():
     parser.add_argument('--nas-config', type=str, default=None, help='configuration for supernet training')
     parser.add_argument('--nas-weights', default=None, help='load pretrained supernet weight')
     parser.add_argument('--wandb', action='store_true')
-    parser.add_argument('--output_dir', default='result',
-                        help='path where to save, empty for no saving')
+    parser.add_argument('--output_dir', default='result', help='path where to save, empty for no saving')
+    
+    # Sample subnet parameter
+    parser.add_argument('--sample_num', type=int, default=100, help='num of subnet to sample')
+    
     return parser
 
 
@@ -213,6 +216,7 @@ def gen_random_config_fn(config):
             res.append(random.choices(ratios, weights(ratios))[0])
         return res
     return _fn_uni
+
 
 def main(args):
     utils.init_distributed_mode(args)
@@ -288,14 +292,7 @@ def main(args):
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
-    if args.nas_mode:
-        if args.nas_config:
-            with open(args.nas_config) as f:
-                nas_config = yaml.load(f, Loader=SafeLoader) 
-        else:
-            raise ValueError("Please provide the nas config when you are running in nas mode")
-    else:
-        nas_config = None
+
     
     print(f"Creating model: {args.model}")
     model = create_model(
@@ -308,74 +305,12 @@ def main(args):
         img_size=args.input_size,
     )
 
-    if args.finetune:
-        if args.finetune.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.finetune, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.finetune, map_location='cpu')
 
-        checkpoint_model = checkpoint['model']
-        state_dict = model.state_dict()
-        for k in ['head.weight', 'head.bias', 'head_dist.weight', 'head_dist.bias']:
-            if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
-                print(f"Removing key {k} from pretrained checkpoint")
-                del checkpoint_model[k]
-
-        # interpolate position embedding
-        pos_embed_checkpoint = checkpoint_model['pos_embed']
-        embedding_size = pos_embed_checkpoint.shape[-1]
-        num_patches = model.patch_embed.num_patches
-        num_extra_tokens = model.pos_embed.shape[-2] - num_patches
-        # height (== width) for the checkpoint position embedding
-        orig_size = int((pos_embed_checkpoint.shape[-2] - num_extra_tokens) ** 0.5)
-        # height (== width) for the new position embedding
-        new_size = int(num_patches ** 0.5)
-        # class_token and dist_token are kept unchanged
-        extra_tokens = pos_embed_checkpoint[:, :num_extra_tokens]
-        # only the position tokens are interpolated
-        pos_tokens = pos_embed_checkpoint[:, num_extra_tokens:]
-        pos_tokens = pos_tokens.reshape(-1, orig_size, orig_size, embedding_size).permute(0, 3, 1, 2)
-        pos_tokens = torch.nn.functional.interpolate(
-            pos_tokens, size=(new_size, new_size), mode='bicubic', align_corners=False)
-        pos_tokens = pos_tokens.permute(0, 2, 3, 1).flatten(1, 2)
-        new_pos_embed = torch.cat((extra_tokens, pos_tokens), dim=1)
-        checkpoint_model['pos_embed'] = new_pos_embed
-
-        model.load_state_dict(checkpoint_model, strict=False)
-        print(f'Load pretrained weight from {args.finetune}')
-
-    if args.attn_only:
-        for name_p,p in model.named_parameters():
-            if '.attn.' in name_p:
-                p.requires_grad = True
-            else:
-                p.requires_grad = False
-        try:
-            model.head.weight.requires_grad = True
-            model.head.bias.requires_grad = True
-        except:
-            model.fc.weight.requires_grad = True
-            model.fc.bias.requires_grad = True
-        try:
-            model.pos_embed.requires_grad = True
-        except:
-            print('no position encoding')
-        try:
-            for p in model.patch_embed.parameters():
-                p.requires_grad = False
-        except:
-            print('no patch embed')
-
-    if args.nas_mode:
-        if 'seperate' in nas_config['sparsity']:
-            print('Set seperate weight !')
-            model.set_seperate_config(nas_config['sparsity']['seperate'])
-        
-        if 'per_cand_affine' in nas_config['sparsity']:
-            print('Build affine module for each candidate block')
-            model.set_indep_per_cand_affine(nas_config['sparsity']['choices'])
-            print(model)
+    # if args.nas_mode:
+    #     if 'per_cand_affine' in nas_config['sparsity']:
+    #         print('Build affine module for each candidate block')
+    #         model.set_indep_per_cand_affine(nas_config['sparsity']['choices'])
+    #         print(model)
     
     model.to(device)
 
@@ -388,22 +323,11 @@ def main(args):
             device='cpu' if args.model_ema_force_cpu else '',
             resume='')
 
-
     model_without_ddp = model
     if args.distributed:
-        if 'seperate' in nas_config['sparsity'] or 'per_cand_affine' in nas_config['sparsity']:
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-        else:
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
-    if args.nas_mode:
-        smallest_config = []
-        for ratios in nas_config['sparsity']['choices']:
-            smallest_config.append(ratios[0])
-        
-        model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
-        model_without_ddp.set_sample_config(smallest_config)    
         
     # load nas pretrained weight
     if args.nas_weights:
@@ -437,34 +361,7 @@ def main(args):
         criterion = torch.nn.BCEWithLogitsLoss()
 
     teacher_model = None
-    if args.distillation_type != 'none':
-        # assert args.teacher_path, 'need to specify teacher-path when using distillation'
-        print(f"Creating teacher model: {args.teacher_model}")
-        # teacher_model = create_model( // regnety160
-        #     args.teacher_model,
-        #     pretrained=False,
-        #     num_classes=args.nb_classes,
-        #     global_pool='avg',
-        # )
-        teacher_model = create_model( # deit-small
-        args.teacher_model,
-        pretrained=True,
-        num_classes=args.nb_classes,
-        drop_rate=args.drop,
-        drop_path_rate=args.drop_path,
-        drop_block_rate=None,
-        img_size=args.input_size
-    )
-        if args.teacher_path:
-            if args.teacher_path.startswith('https'):
-                checkpoint = torch.hub.load_state_dict_from_url(
-                args.teacher_path, map_location='cpu', check_hash=True)
-            else:
-                checkpoint = torch.load(args.teacher_path, map_location='cpu')
-            teacher_model.load_state_dict(checkpoint['model'])
-        teacher_model.to(device)
-        teacher_model.eval()
-
+    
     # wrap the criterion in our custom DistillationLoss, which
     # just dispatches to the original criterion if args.distillation_type is 'none'
     criterion = DistillationLoss(
@@ -472,122 +369,60 @@ def main(args):
     )
 
     output_dir = Path(args.output_dir)
-    if args.resume:
-        if args.resume.startswith('https'):
-            checkpoint = torch.hub.load_state_dict_from_url(
-                args.resume, map_location='cpu', check_hash=True)
-        else:
-            checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
-        if not args.eval and 'optimizer' in checkpoint and 'lr_scheduler' in checkpoint and 'epoch' in checkpoint:
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-            args.start_epoch = checkpoint['epoch'] + 1
-            if args.model_ema:
-                utils._load_checkpoint_for_ema(model_ema, checkpoint['model_ema'])
-            if 'scaler' in checkpoint:
-                loss_scaler.load_state_dict(checkpoint['scaler'])
-        lr_scheduler.step(args.start_epoch)
-    
-    # Evaluate only
-    if args.eval:
-        test_stats = evaluate(nas_config, data_loader_val, model, device, args)
-        nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
-        if args.subnet:
-            nas_test_config_list = [args.subnet]
-        for nas_test_config in nas_test_config_list:
-            print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
-        return
 
-    nas_test_config_list = ['', [1, 4], [1, 3], [2, 4], [4, 4]] if not args.nas_weights else ['']
-    max_accuracy = {'_acc1': 0.0, '[1, 4]_acc1': 0.0, '[1, 3]_acc1': 0.0, '[2, 4]_acc1': 0.0, '[4, 4]_acc1': 0.0}
-    print(f"Start training for {args.epochs} epochs")
+
+    options = [[1, 4], [2, 4], [1, 3], [4, 4]]
+    sample_info = {}
+    sample_info['config'] = []
+    sample_info['accuracy'] = []
+    sample_info['flops'] = []
+    sample_info['options'] = options
+    sample_save_path = os.path.join(args.output_dir, 'sample_info.pth')
+
+    
+    print(f"Start sample for {args.sample_num} subnet")
     start_time = time.time()
     
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
+    for i in range(args.sample_num):
 
-        # train_stats = train_one_epoch(
-        #     model, criterion, data_loader_train,
-        #     optimizer, device, epoch, loss_scaler,
-        #     args.clip_grad, model_ema, mixup_fn,
-        #     set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
-        #     args = args,
-        # )
-
-        # log_stats = {'epoch': epoch,
-        #              **{f'train_{k}': v for k, v in train_stats.items()}}
-        log_stats = {}
+        sample_config = [random.choice(options) for _ in range(48)]
+        model_without_ddp.set_sample_config(sample_config)
+        flops = model_without_ddp.flops()
         
-        lr_scheduler.step(epoch)
-        if args.output_dir and (epoch % 5 == 0) or (epoch == args.epochs - 1):
-            checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
-            for checkpoint_path in checkpoint_paths:
-                utils.save_on_master({
-                    'model': model_without_ddp.state_dict(),
-                    'optimizer': optimizer.state_dict(),
-                    'lr_scheduler': lr_scheduler.state_dict(),
-                    'epoch': epoch,
-                    'scaler': loss_scaler.state_dict(),
-                    'args': args,
-                }, checkpoint_path)
-        
-        # eval for different uniform configs  [[1, 4], [1, 3], [2, 4], [4, 4]]
-        for nas_test_config in nas_test_config_list:
-            if nas_test_config:
-                test_config = [nas_test_config for _ in range(48)]
-                model_without_ddp.set_sample_config(test_config)
+        test_stats = evaluate(data_loader_val, model, device)
+        print(f"Accuracy of the {i}th subnet on the {len(dataset_val)} test images: {test_stats['acc1']:.3f}%")
 
-            test_stats = evaluate(data_loader_val, model, device)
-            print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats['acc1']:.3f}%")
-
-            if max_accuracy[f'{nas_test_config}_acc1'] < test_stats['acc1']:
-                max_accuracy[f'{nas_test_config}_acc1'] = test_stats['acc1']
-                if args.output_dir:
-                    checkpoint_paths = [output_dir / f'{nas_test_config}_best_checkpoint.pth']
-                    for checkpoint_path in checkpoint_paths:
-                        utils.save_on_master({
-                            'model': model_without_ddp.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'lr_scheduler': lr_scheduler.state_dict(),
-                            'epoch': epoch,
-                            'scaler': loss_scaler.state_dict(),
-                            'args': args,
-                        }, checkpoint_path)
-
-            print('Accuracy of the {name} subnet Max accuracy: {max_accuracy:.3f}%'
-                  .format(name=nas_test_config, max_accuracy=max_accuracy[f'{nas_test_config}_acc1']))
-
-            log_stats = {**log_stats, **{f'test_{nas_test_config}_{k}': v for k, v in test_stats.items()}}
+        log_stats = {**{f'test_{k}': v for k, v in test_stats.items()},
+                     'flops': flops,
+                     'config': sample_config}
 
         if args.output_dir and utils.is_main_process():
             with (output_dir / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
                 
             if wandb and wandb.run:
-                wandb.log(log_stats)
+                wandb.log({**{f'test_{k}': v for k, v in test_stats.items()},
+                            'flops': flops,
+                            'config': sample_config})
+            
+            # save sample informations
+            sample_info['accuracy'].append(test_stats['acc1'])
+            sample_info['config'].append(sample_config)
+            sample_info['flops'].append(flops)
+
+    if args.output_dir:
+        torch.save(sample_info, sample_save_path)
+        print('save sample info to', sample_save_path)
 
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    print(f'Total time {total_time_str} for {args.sample_num} subnet samples.')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('DeiT training and evaluation script', parents=[get_args_parser()])
+    parser = argparse.ArgumentParser('Sparsity DeiT sample script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)
 
-
-"""
-python -m torch.distributed.launch \
---nproc_per_node=1 \
---use_env \
---master_port 29501 \
-main.py \
---nas-config configs/deit_small_nxm_nas_124+13.yaml \
---data-path /work/shadowpa0327/imagenet \
---distillation-type soft_fd 
-"""
