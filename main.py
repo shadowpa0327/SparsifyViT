@@ -540,7 +540,7 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
-
+            
         if 'greedy' in nas_config['sparsity']:
             train_stats = train_one_epoch_greedy(
                 model, criterion, data_loader_train,
@@ -553,7 +553,8 @@ def main(args):
                 num_kept_subnet = nas_config['sparsity']['greedy']['num_kept_paths'],
                 epsilon = epsilon_scheduler.get_epsilon(epoch),
                 proxy_metrics = TradeOffLoss(alpha = nas_config['sparsity']['greedy']['metrics']['alpha'],
-                                                beta = nas_config['sparsity']['greedy']['metrics']['beta'])
+                                                beta = nas_config['sparsity']['greedy']['metrics']['beta']),
+                compression_ratio_contraint = nas_config['sparsity']['greedy']['compression_ratio_constraint']
             )
         else:
             train_stats = train_one_epoch(

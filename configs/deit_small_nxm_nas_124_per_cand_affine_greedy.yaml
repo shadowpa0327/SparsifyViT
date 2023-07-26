@@ -11,4 +11,5 @@ sparsity:
     cand_pool_size : 1000
     metrics:
       alpha: 1.0
-      beta: 1.0
+      beta: 0.0 # focus on loss only
+    compression_ratio_contraint: 0.5

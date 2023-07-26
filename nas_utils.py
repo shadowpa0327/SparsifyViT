@@ -18,10 +18,15 @@ class CandidatePool:
         """
         Selects a subnet
         Returns:
-            selected_subnet: The selected subnet (from `candidate_pools`).
+            The selected subnet (from `candidate_pools`) if `candidate_pools` is not empty.
+            Otherwise, return None
         """
-        assert len(self.candidate_pool_size), "CandidatePool is empty, no subnet inside"
-        selected_subnet = random.choice(self.candidate_pools)[1]  # Extract only the subnet (index 1)
+        if len(self.candidate_pool_size) > 0:
+            selected_subnet = random.choice(self.candidate_pools)[1]  # Extract only the subnet (index 1)
+        else:
+            selected_subnet = None
+            #print("CandidatePool is empty, no subnet inside")
+       
         return selected_subnet
 
     def add_one_subnet_with_score(self, subnet, score):

@@ -75,7 +75,8 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
                     set_training_mode=True, args = None, data_loader_proxy: Iterable = None,
                     cand_pool: CandidatePool = None, num_subnets = 10, num_kept_subnet = 5,
-                    epsilon = 0.0, all_choices = None, proxy_metrics: Optional[TradeOffLoss] = None):
+                    epsilon = 0.0, all_choices = None, proxy_metrics: Optional[TradeOffLoss] = None,
+                    compression_ratio_contraint = 1.0):
     
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -85,9 +86,9 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
     
     # get the flops of uncompressed model and smallest models, for normalization purpose
     model.module.set_largest_config()
-    largest_flops = model.module.flops() / 1e9
+    largest_flops = round(model.module.flops() / 1e9, 2)
     model.module.set_smallest_config()
-    smallest_flops = model.module.flops() / 1e9
+    smallest_flops = round(model.module.flops() / 1e9, 2)
 
     proxy_criterion = torch.nn.CrossEntropyLoss()
     
@@ -115,10 +116,12 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
         step I. 
         Sample the subnetwork using epsilon greedy rules
         '''
-        candidate_subnets_with_scores = []
+        candidate_subnets_with_scores_and_flops = []
         for i in range(num_subnets):
             if random.random() < epsilon: # get from candidate pools
                 subnet = cand_pool.get_one_subnet()
+                if subnet is None:
+                    subnet = model.module.get_random_sample_config()
             else:
                 subnet = model.module.get_random_sample_config()
 
@@ -138,24 +141,25 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
                 proxy_losses  = t.tolist()[0]
                 
                 # calulate score
-                flops = model.module.flops() / 1e9 
+                flops = round(model.module.flops() / 1e9, 2) 
                 normalized_flops = (flops - smallest_flops) / (largest_flops - smallest_flops) # min-max normalization
-                proxy_scores = proxy_metrics(proxy_losses, normalized_flops)
-                candidate_subnets_with_scores.append((subnet, proxy_scores))
+                proxy_scores = proxy_metrics(proxy_losses, flops)
+                candidate_subnets_with_scores_and_flops.append((subnet, proxy_scores, normalized_flops))
         '''
         step II. 
         ranking the sampled subnetworks and keep the top-k 
         '''
-        candidate_subnets_with_scores = sorted(candidate_subnets_with_scores, key=lambda x: x[1])
-        candidate_subnets_with_scores = candidate_subnets_with_scores[:min(len(candidate_subnets_with_scores), num_kept_subnet)]
+        candidate_subnets_with_scores_and_flops = sorted(candidate_subnets_with_scores_and_flops, key=lambda x: x[1])
+        candidate_subnets_with_scores_and_flops = candidate_subnets_with_scores_and_flops[:min(len(candidate_subnets_with_scores_and_flops), num_kept_subnet)]
         
         '''
         step III.
         register benchmarked subnet into candidate pools, 
         the candidate will automatically maintain the subnet with promising performance
         '''
-        for subnet, score in candidate_subnets_with_scores:
-            cand_pool.add_one_subnet_with_score(subnet, score)
+        for subnet, score, flops in candidate_subnets_with_scores_and_flops:
+            if flops <= (compression_ratio_contraint * largest_flops):
+                cand_pool.add_one_subnet_with_score(subnet, score, normalized_flops)
         
         
         '''
@@ -163,7 +167,7 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
         train the selected subnetworks
         '''
         loss_value = 0.0        
-        for subnet, _ in candidate_subnets_with_scores:
+        for subnet, _ in candidate_subnets_with_scores_and_flops:
             #print("Running subnet", subnet)
             # 1. set the configuration of subnetwork
             model.module.set_sample_config(subnet)
