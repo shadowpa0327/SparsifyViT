@@ -24,7 +24,7 @@ from engine import train_one_epoch, train_one_epoch_greedy, evaluate
 from losses import DistillationLoss
 from samplers import RASampler
 from augment import new_data_aug_generator
-from greedy_nas_utils import build_candidate_pool, LinearEpsilonScheduler, TradeOffLoss
+from nas_utils import build_candidate_pool, LinearEpsilonScheduler, TradeOffLoss
 
 import models
 import models_v2

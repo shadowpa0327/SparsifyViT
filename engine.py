@@ -7,7 +7,7 @@ import math
 import sys
 import random
 from typing import Iterable, Optional
-from greedy_nas_utils import CandidatePool
+from nas_utils import CandidatePool
 import torch
 
 from timm.data import Mixup
@@ -15,7 +15,7 @@ from timm.utils import accuracy, ModelEma
 import torch.distributed as dist
 from losses import DistillationLoss
 import utils
-from greedy_nas_utils import TradeOffLoss
+from nas_utils import TradeOffLoss
 import torch
 
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
