@@ -8,6 +8,20 @@ Here, I have build an interface and add some naive methods for add sparsity into
 ## Some warning !
 - Now we can't not support non-uniform subnet (maybe find by EA) evaluate & finetuned
 
+# Sample subnet
+CUDA_VISIBLE_DEVICES=2,3 python -m torch.distributed.launch \
+--master_port 29503 --nproc_per_node=2 --use_env sampling_subnet.py \
+--model Sparse_deit_small_patch16_224 \
+--data-path /dataset/imagenet \
+--batch-size 256 \
+--nas-mode \
+--nas-weight 'KD_nas_124+13_150epoch_round3/[1, 3]_best_checkpoint.pth' \
+--sample_num 3000 \
+--output_dir sample_KD_round3_3000 \
+--dist-eval \
+--eval \
+--wandb
+
 ## SubNet finetuned command
 '''
 python -m torch.distributed.launch --master_port 29515 --nproc_per_node=8 --use_env main.py \
