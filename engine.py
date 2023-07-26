@@ -7,7 +7,7 @@ import math
 import sys
 import random
 from typing import Iterable, Optional
-from nas_utils import CandidatePool
+from nas_utils import CandidatePool, TradeOffLoss
 import torch
 
 from timm.data import Mixup
@@ -15,14 +15,14 @@ from timm.utils import accuracy, ModelEma
 import torch.distributed as dist
 from losses import DistillationLoss
 import utils
-from nas_utils import TradeOffLoss
 import torch
 
 def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
                     data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0,
                     model_ema: Optional[ModelEma] = None, mixup_fn: Optional[Mixup] = None,
-                    set_training_mode=True, args = None):
+                    set_training_mode=True, nas_mode = False,
+                    args = None):
     model.train(set_training_mode)
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
@@ -30,7 +30,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: DistillationLoss,
     print_freq = 10
     
     for samples, targets in metric_logger.log_every(data_loader, print_freq, header):
-        if args.nas_mode:
+        if nas_mode:
             model.module.set_random_sample_config()
         samples = samples.to(device, non_blocking=True)
         targets = targets.to(device, non_blocking=True)

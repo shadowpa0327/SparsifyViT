@@ -85,13 +85,6 @@ class TradeOffLoss:
         score = err * self.alpha * math.pow(efficiency, self.beta)
         return score
 
-
-def sampling_subnets(model, val_loader, proxy_loader, num_samples = 100):
-    visited_subnets = []
-    for i in range(num_samples):
-        
-    
-
 if __name__ == '__main__':
     # # Create the SearchSpace instance with candidate choices, epsilon, and promising pool size
     # search_space = CandidatePool(candidate_pool_size=2)

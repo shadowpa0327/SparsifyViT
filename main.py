@@ -194,7 +194,6 @@ def get_args_parser():
     parser.add_argument('--model', default='Sparse_deit_small_patch16_224', type=str, metavar='MODEL',
                         help='Name of model to train')
     parser.add_argument('--pretrained', action='store_true', help='Use pretrained model')
-    parser.add_argument('--nas-mode', action='store_true', default=False)
     parser.add_argument('--nas-config', type=str, default=None, help='configuration for supernet training')
     parser.add_argument('--nas-weights', default=None, help='load pretrained supernet weight')
     parser.add_argument('--wandb', action='store_true')
@@ -382,14 +381,13 @@ def main(args):
         except:
             print('no patch embed')
 
-    if args.nas_mode:
-        if 'seperate' in nas_config['sparsity']:
-            print('Set seperate weight !')
-            model.set_seperate_config(nas_config['sparsity']['seperate'])
-        
-        if 'per_cand_affine' in nas_config['sparsity']:
-            print('Build affine module for each candidate block')
-            model.set_indep_per_cand_affine(nas_config['sparsity']['choices'])
+    if 'seperate' in nas_config['sparsity']:
+        print('Set seperate weight !')
+        model.set_seperate_config(nas_config['sparsity']['seperate'])
+    
+    if 'per_cand_affine' in nas_config['sparsity']:
+        print('Build affine module for each candidate block')
+        model.set_indep_per_cand_affine(nas_config['sparsity']['choices'])
     
     model.to(device)
 
@@ -411,14 +409,15 @@ def main(args):
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
         model_without_ddp = model.module
 
-    if args.nas_mode:
-        smallest_config = []
-        for ratios in nas_config['sparsity']['choices']:
-            smallest_config.append(ratios[0])
-        
-        model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
-        model_without_ddp.set_sample_config(smallest_config)    
-        model_without_ddp.register_largest_and_smallest_config(nas_config['sparsity']['choices'])
+
+    smallest_config = []
+    for ratios in nas_config['sparsity']['choices']:
+        smallest_config.append(ratios[0])
+    
+    model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
+    model_without_ddp.register_largest_and_smallest_config(nas_config['sparsity']['choices'])
+    model_without_ddp.set_largest_config() # by defaule set the model to be the largest subnet
+    
     # load nas pretrained weight
     if args.nas_weights:
         state_dict = torch.load(args.nas_weights)
@@ -437,10 +436,9 @@ def main(args):
 
     
     
-    if args.nas_mode:
-        if 'greedy' in nas_config['sparsity']:
-            print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {args.epochs / nas_config['sparsity']['greedy']['num_kept_paths']}")
-            args.epochs = int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])
+    if 'greedy' in nas_config['sparsity']:
+        print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {args.epochs / nas_config['sparsity']['greedy']['num_kept_paths']}")
+        args.epochs = int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])
             
     lr_scheduler, _ = create_scheduler(args, optimizer)
 
@@ -492,7 +490,7 @@ def main(args):
         criterion, teacher_model, args.distillation_type, args.distillation_alpha, args.distillation_tau, args.distillation_gamma
     )
 
-    if args.nas_mode and 'greedy' in nas_config['sparsity']:
+    if 'greedy' in nas_config['sparsity']:
         cand_pool = build_candidate_pool(args, nas_config['sparsity']['greedy'])
     else:
         cand_pool = None
@@ -534,7 +532,7 @@ def main(args):
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
 
-    if args.nas_mode and 'greedy' in nas_config['sparsity']:
+    if 'greedy' in nas_config['sparsity']:
         epsilon_scheduler = LinearEpsilonScheduler(total_epochs = args.epochs,
                                                    min_eps = nas_config['sparsity']['greedy']['eps_min'],
                                                    max_eps = nas_config['sparsity']['greedy']['eps_max'])
@@ -543,30 +541,29 @@ def main(args):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
 
-
-        if args.nas_mode:
-            if 'greedy' in nas_config['sparsity']:
-                train_stats = train_one_epoch_greedy(
-                    model, criterion, data_loader_train,
-                    optimizer, device, epoch, loss_scaler, args.clip_grad,
-                    model_ema, mixup_fn, set_training_mode = args.train_mode,
-                    args = args, 
-                    # greedyNas correlated params
-                    data_loader_proxy = data_loader_proxy, cand_pool = cand_pool,
-                    num_subnets = nas_config['sparsity']['greedy']['num_milti_paths'],
-                    num_kept_subnet = nas_config['sparsity']['greedy']['num_kept_paths'],
-                    epsilon = epsilon_scheduler.get_epsilon(epoch),
-                    proxy_metrics = TradeOffLoss(alpha = nas_config['sparsity']['greedy']['metrics']['alpha'],
-                                                 beta = nas_config['sparsity']['greedy']['metrics']['beta'])
-                )
-            else:
-                train_stats = train_one_epoch(
-                    model, criterion, data_loader_train,
-                    optimizer, device, epoch, loss_scaler,
-                    args.clip_grad, model_ema, mixup_fn,
-                    set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
-                    args = args,
-                )
+        if 'greedy' in nas_config['sparsity']:
+            train_stats = train_one_epoch_greedy(
+                model, criterion, data_loader_train,
+                optimizer, device, epoch, loss_scaler, args.clip_grad,
+                model_ema, mixup_fn, set_training_mode = args.train_mode,
+                args = args, 
+                # greedyNas correlated params
+                data_loader_proxy = data_loader_proxy, cand_pool = cand_pool,
+                num_subnets = nas_config['sparsity']['greedy']['num_milti_paths'],
+                num_kept_subnet = nas_config['sparsity']['greedy']['num_kept_paths'],
+                epsilon = epsilon_scheduler.get_epsilon(epoch),
+                proxy_metrics = TradeOffLoss(alpha = nas_config['sparsity']['greedy']['metrics']['alpha'],
+                                                beta = nas_config['sparsity']['greedy']['metrics']['beta'])
+            )
+        else:
+            train_stats = train_one_epoch(
+                model, criterion, data_loader_train,
+                optimizer, device, epoch, loss_scaler,
+                args.clip_grad, model_ema, mixup_fn,
+                set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
+                args = args,
+                nas_mode=True
+            )
 
         log_stats = {'epoch': epoch,
                      **{f'train_{k}': v for k, v in train_stats.items()}}
