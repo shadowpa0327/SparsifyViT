@@ -11,6 +11,6 @@ sparsity:
     metrics:
       alpha: 1.0
       beta: 0.0 # focus on loss only
-    compression_ratio_contraint: 0.5
+    compression_ratio_contraint: 0.6
     proxy_dataset:
       image_per_classes: 1

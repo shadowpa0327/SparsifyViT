@@ -435,13 +435,14 @@ def main(args):
     loss_scaler = NativeScaler()
 
     
-    
-    if 'greedy' in nas_config['sparsity']:
-        print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
-        args.epochs = int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])
-        print(f"Enable greedyNAS, reschedule the epoch from {args.warmup_epochs} to {int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
-        args.warmup_epochs = (int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths']))
+    #NOTE(brian1009) Disable the rescaling for experiment.
+    # if 'greedy' in nas_config['sparsity']:
+    #     print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
+    #     args.epochs = int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])
+    #     print(f"Enable greedyNAS, reschedule the epoch from {args.warmup_epochs} to {int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
+    #     args.warmup_epochs = (int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths']))
     #lr_scheduler, _ = create_scheduler(args, optimizer) #create from timm, per epoch manner
+
     lr_scheduler = build_scheduler(args, optimizer, len(data_loader_train)) # per batch manner
     
     criterion = LabelSmoothingCrossEntropy()
@@ -559,8 +560,6 @@ def main(args):
                 num_subnets = nas_config['sparsity']['greedy']['num_milti_paths'],
                 num_kept_subnet = nas_config['sparsity']['greedy']['num_kept_paths'],
                 epsilon = epsilon_scheduler.get_epsilon(epoch),
-                proxy_metrics = TradeOffLoss(alpha = nas_config['sparsity']['greedy']['metrics']['alpha'],
-                                                beta = nas_config['sparsity']['greedy']['metrics']['beta']),
                 compression_ratio_contraint = nas_config['sparsity']['greedy']['compression_ratio_contraint']
             )
         else:

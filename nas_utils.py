@@ -32,7 +32,7 @@ class CandidatePool:
 
         return selected_subnet
 
-    def add_one_subnet_with_score(self, subnet, score):
+    def add_one_subnet_with_score_and_flops(self, subnet, score, flops):
         """
         Adds a subnet to the `candidate_pools` if it belongs to the top candidates.
 
@@ -40,7 +40,7 @@ class CandidatePool:
             subnet: The subnet to add to the promising pools.
             score: The score of the subnet (used for max-heap comparison).
         """
-        self.candidate_pools.append((score, subnet))
+        self.candidate_pools.append((score, subnet, flops))
         self.candidate_pools = sorted(self.candidate_pools, key = lambda a : a[0])[:min(len(self.candidate_pools), self.max_pool_size)]
         #self.candidate_pools = self.candidate_pools[:min(len(self.candidate_pools), self.max_pool_size)]
 
