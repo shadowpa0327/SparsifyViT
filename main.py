@@ -25,6 +25,7 @@ from losses import DistillationLoss
 from samplers import RASampler
 from augment import new_data_aug_generator
 from nas_utils import build_candidate_pool, LinearEpsilonScheduler, TradeOffLoss
+from lr_scheduler import build_scheduler
 
 import models
 import models_v2
@@ -236,9 +237,16 @@ def main(args):
     
     cudnn.benchmark = True
 
+    if args.nas_config:
+        with open(args.nas_config) as f:
+            nas_config = yaml.load(f, Loader=SafeLoader) 
+    else:
+        raise ValueError("Please provide the nas config when you are running in nas mode")
+    
     dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     dataset_val, _ = build_dataset(is_train=False, args=args)
-    dataset_proxy, _ = build_dataset(is_train = False, args = args, is_proxy = True)
+    dataset_proxy, _ = build_dataset(is_train = False, args = args, is_proxy = True, 
+                                     image_per_classes=nas_config['sparsity']['greedy']['proxy_dataset']['image_per_classes'])
 
     if args.distributed:
         num_tasks = utils.get_world_size()
@@ -302,14 +310,6 @@ def main(args):
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
-    if args.nas_mode:
-        if args.nas_config:
-            with open(args.nas_config) as f:
-                nas_config = yaml.load(f, Loader=SafeLoader) 
-        else:
-            raise ValueError("Please provide the nas config when you are running in nas mode")
-    else:
-        nas_config = None
     
     print(f"Creating model: {args.model}")
     model = create_model(
@@ -437,11 +437,13 @@ def main(args):
     
     
     if 'greedy' in nas_config['sparsity']:
-        print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {args.epochs / nas_config['sparsity']['greedy']['num_kept_paths']}")
+        print(f"Enable greedyNAS, reschedule the epoch from {args.epochs} to {int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
         args.epochs = int(args.epochs / nas_config['sparsity']['greedy']['num_kept_paths'])
-            
-    lr_scheduler, _ = create_scheduler(args, optimizer)
-
+        print(f"Enable greedyNAS, reschedule the epoch from {args.warmup_epochs} to {int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths'])}")
+        args.warmup_epochs = (int(args.warmup_epochs / nas_config['sparsity']['greedy']['num_kept_paths']))
+    #lr_scheduler, _ = create_scheduler(args, optimizer) #create from timm, per epoch manner
+    lr_scheduler = build_scheduler(args, optimizer, len(data_loader_train)) # per batch manner
+    
     criterion = LabelSmoothingCrossEntropy()
 
     if mixup_active:
@@ -513,18 +515,22 @@ def main(args):
                 loss_scaler.load_state_dict(checkpoint['scaler'])
     
         if 'cand_pool' in checkpoint and cand_pool is not None:
-            cand_pool.load_state_dict(checkpoint['cand_pool'])
+            if checkpoint['cand_pool'] is None:
+                print("candidate pool is set to be none, skip loading")
+            else:
+                cand_pool.load_state_dict(checkpoint['cand_pool'])
         
-        lr_scheduler.step(args.start_epoch)
+        #lr_scheduler.step(args.start_epoch)
     
     # Evaluate only
     if args.eval:
-        test_stats = evaluate(nas_config, data_loader_val, model, device, args)
-        nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
-        if args.subnet:
-            nas_test_config_list = [args.subnet]
-        for nas_test_config in nas_test_config_list:
-            print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
+        raise NotImplementedError("Evaluation only part is not yet support")
+        # test_stats = evaluate(nas_config, data_loader_val, model, device, args)
+        # nas_test_config_list = [args.nas_test_config] if args.nas_test_config else [[1, 4], [1, 3], [2, 4], [4, 4]]
+        # if args.subnet:
+        #     nas_test_config_list = [args.subnet]
+        # for nas_test_config in nas_test_config_list:
+        #     print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats[f'{nas_test_config}_acc1']:.3f}%")
         return
 
     nas_test_config_list = ['', [1, 4], [1, 3], [2, 4], [4, 4]] if not args.nas_weights else ['']
@@ -547,6 +553,7 @@ def main(args):
                 optimizer, device, epoch, loss_scaler, args.clip_grad,
                 model_ema, mixup_fn, set_training_mode = args.train_mode,
                 args = args, 
+                lr_scheduler = lr_scheduler,
                 # greedyNas correlated params
                 data_loader_proxy = data_loader_proxy, cand_pool = cand_pool,
                 num_subnets = nas_config['sparsity']['greedy']['num_milti_paths'],
@@ -554,7 +561,7 @@ def main(args):
                 epsilon = epsilon_scheduler.get_epsilon(epoch),
                 proxy_metrics = TradeOffLoss(alpha = nas_config['sparsity']['greedy']['metrics']['alpha'],
                                                 beta = nas_config['sparsity']['greedy']['metrics']['beta']),
-                compression_ratio_contraint = nas_config['sparsity']['greedy']['compression_ratio_constraint']
+                compression_ratio_contraint = nas_config['sparsity']['greedy']['compression_ratio_contraint']
             )
         else:
             train_stats = train_one_epoch(
@@ -563,14 +570,15 @@ def main(args):
                 args.clip_grad, model_ema, mixup_fn,
                 set_training_mode=args.train_mode,  # keep in eval mode for deit finetuning / train mode for training and deit III finetuning
                 args = args,
-                nas_mode=True
+                nas_mode=True,
+                lr_scheduler = lr_scheduler
             )
 
         log_stats = {'epoch': epoch,
                      **{f'train_{k}': v for k, v in train_stats.items()}}
         
-        lr_scheduler.step(epoch)
-        if args.output_dir and (epoch % 5 == 0) or (epoch == args.epochs - 1):
+        #lr_scheduler.step(epoch)
+        if args.output_dir and (epoch % 3 == 0) or (epoch == args.epochs - 1):
             checkpoint_paths = [output_dir / f'checkpoint_{epoch}.pth']
             for checkpoint_path in checkpoint_paths:
                 utils.save_on_master({
@@ -582,7 +590,7 @@ def main(args):
                     'args': args,
                     'candidate_pools' : cand_pool.state_dict() if cand_pool is not None else None
                 }, checkpoint_path)
-        
+
         # eval for different uniform configs  [[1, 4], [1, 3], [2, 4], [4, 4]]
         for nas_test_config in nas_test_config_list:
             if nas_test_config:
