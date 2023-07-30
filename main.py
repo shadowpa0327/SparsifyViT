@@ -201,20 +201,7 @@ def get_args_parser():
     parser.add_argument('--output_dir', default='result',
                         help='path where to save, empty for no saving')
     return parser
-
-
-def gen_random_config_fn(config):
-    if utils.get_rank() == 0 : # print whether to use non_unifrom at initialization at main process
-        print(f"Set up the uniform sampling function")
-    def _fn_uni():
-        def weights(ratios):
-            return [1 for _ in ratios]
-        res = []
-        for ratios in config['sparsity']['choices']:
-            res.append(random.choices(ratios, weights(ratios))[0])
-        return res
-    return _fn_uni
-
+    
 def main(args):
     utils.init_distributed_mode(args)
 
@@ -414,8 +401,15 @@ def main(args):
     for ratios in nas_config['sparsity']['choices']:
         smallest_config.append(ratios[0])
     
-    model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
-    model_without_ddp.register_largest_and_smallest_config(nas_config['sparsity']['choices'])
+    #model_without_ddp.set_random_config_fn(gen_random_config_fn(nas_config))
+    model_without_ddp.set_sampler_info(
+        all_choices = nas_config['sparsity']['choices'],
+        flop_based = nas_config['sparsity']['sampling']['flop_based'],
+        min_flops = nas_config['sparsity']['sampling']['min_flops'],
+        max_flops = nas_config['sparsity']['sampling']['max_flops'],
+        interval_size = nas_config['sparsity']['sampling']['step_size']
+    )
+    #model_without_ddp.register_largest_and_smallest_config(nas_config['sparsity']['choices'])
     model_without_ddp.set_largest_config() # by defaule set the model to be the largest subnet
     
     # load nas pretrained weight
@@ -597,6 +591,7 @@ def main(args):
                 model_without_ddp.set_sample_config(test_config)
 
             test_stats = evaluate(data_loader_val, model, device)
+            print(f"FLOPs of subnet:{model_without_ddp.flops()}")
             print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats['acc1']:.3f}%")
 
             if max_accuracy[f'{nas_test_config}_acc1'] < test_stats['acc1']:

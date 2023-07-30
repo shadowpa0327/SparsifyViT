@@ -78,7 +78,7 @@ def path_filtering(model: torch.nn.Module, proxy_samples: torch.tensor, proxy_ta
                     compression_ratio_contraint:float):
     
     model.module.set_largest_config()
-    largest_flops = round(model.module.flops() / 1e9, 2)
+    largest_flops = model.module.flops()
     candidate_subnets_with_scores_and_flops = []
     proxy_criterion = torch.nn.CrossEntropyLoss()
 
@@ -110,7 +110,7 @@ def path_filtering(model: torch.nn.Module, proxy_samples: torch.tensor, proxy_ta
             proxy_losses  = t.tolist()[0]
 
             # calulate score
-            flops = round(model.module.flops() / 1e9, 2)
+            flops = model.module.flops()
             candidate_subnets_with_scores_and_flops.append((subnet, proxy_losses, flops))
     '''
     step II.
@@ -183,7 +183,6 @@ def train_one_epoch_greedy(model: torch.nn.Module, criterion: DistillationLoss,
                                      device, cand_pool, num_subnets, num_kept_subnet, epsilon,
                                      compression_ratio_contraint) 
         subnet = filtered_subnets_pools[(iteration % filtered_subnets_pools_update_freq)]
-
         # set the configuration of subnetwork
         model.module.set_sample_config(subnet)
         with torch.cuda.amp.autocast():

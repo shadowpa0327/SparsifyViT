@@ -24,6 +24,7 @@ Hacked together by / Copyright 2020, Ross Wightman
 """
 import math
 import logging
+import numpy as np
 from functools import partial
 from collections import OrderedDict
 from copy import deepcopy
@@ -39,6 +40,8 @@ from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from timm.models.registry import register_model
 
 from sparse_linear import SparseLinearSuper
+import random
+from nas_utils import RandomCandGenerator
 
 _logger = logging.getLogger(__name__)
 
@@ -292,6 +295,8 @@ class SparseVisionTransformer(nn.Module):
         trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
 
+        self.current_cfg = None
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             trunc_normal_(m.weight, std=.02)
@@ -349,6 +354,7 @@ class SparseVisionTransformer(nn.Module):
             layer.set_seperate_config(seperate_configs)
 
     def set_sample_config(self, sparse_configs):
+        self.current_cfg = sparse_configs
         for ratio, layer in zip(sparse_configs, filter(lambda x: isinstance(x, SparseLinearSuper), self.modules())):
             layer.set_sample_config(ratio)
 
@@ -368,9 +374,44 @@ class SparseVisionTransformer(nn.Module):
         self.set_sample_config(self.largest_config)
     
 
-    def set_random_config_fn(self, fn):
-        self.random_config_fn = fn
+    def set_sampler_info(self, 
+                        all_choices, flop_based = False, 
+                        interval_size = 0.2, min_flops = 1.6, 
+                        max_flops = 4.6, patient_iters = 100000):
+        self.register_largest_and_smallest_config(all_choices)
+        self.flop_based = flop_based
+        self.interval_size = interval_size
+        self.min_flops = self.flops(self.smallest_config)
+        self.max_flops = self.flops(self.largest_config)
+        self.is_sampler_info_set = True
+        self.all_choices = all_choices
+        self.max_patient_iters = patient_iters
+        self.random_config_generator = RandomCandGenerator(self.all_choices)
+        print("Register the choices")
+        print(f"*FLOPs of largest subnetworks: {self.max_flops}")
+        print(f"*FLOPs of smallest subnetworks: {self.min_flops}")
 
+    def random_config_fn(self):
+        if not self.is_sampler_info_set:
+            raise RuntimeError("Please call the function `set_sampler_info() to set the required information first`")
+        
+        if self.flop_based:
+            patient_counter = 0
+            flops_ranges = [(f, min(f + self.interval_size, self.max_flops)) for f in np.arange(self.min_flops, self.max_flops, self.interval_size)]
+            group = random.choice(range(len(flops_ranges)))
+            (min_flops, max_flops) = flops_ranges[group]
+            while True: 
+                if patient_counter >= self.max_patient_iters:
+                    raise RuntimeError(f"Patient steps exceed, cannot get subnet within flops range ({min_flops}, {max_flops})," 
+                                       "please check you search space")
+                res = self.random_config_generator.random()
+                flop = self.flops(res)
+                if flop >= min_flops and flop <= max_flops:
+                    return res
+                patient_counter += 1
+        else:
+            return self.random_config_generator.random()
+    
     def set_random_sample_config(self):
         self.set_sample_config(self.random_config_fn())
 
@@ -388,7 +429,11 @@ class SparseVisionTransformer(nn.Module):
         for sparse_choices, layer in zip(all_sparse_choices, filter(lambda x: isinstance(x, SparseLinearSuper), self.modules())):
             layer.set_indeped_affine(sparse_choices)
     
-    def flops(self):
+    def flops(self, cfg = None, precision = 2):
+        backup_cfg = self.current_cfg
+        if cfg is not None:
+            self.set_sample_config(cfg)
+        
         flops = 0
         flops += self.patch_embed.flops()
         
@@ -399,7 +444,11 @@ class SparseVisionTransformer(nn.Module):
         flops += self.num_features * self.num_tokens
         # classification head
         flops += self.num_features * self.num_classes
-        return flops
+        
+        if cfg is not None and backup_cfg is not None:
+            self.set_sample_config(backup_cfg)
+        
+        return round(flops / 1e9, precision)
 
 
 
