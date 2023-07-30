@@ -11,6 +11,13 @@ sparsity:
     metrics:
       alpha: 1.0
       beta: 0.0 # focus on loss only
-    compression_ratio_contraint: 0.6
+    compression_ratio_contraint: 0.45
     proxy_dataset:
       image_per_classes: 1
+
+  sampling:
+    flop_based: False
+    min_flops: 1.6
+    max_flops: 4.6
+    step_size: 0.4
+    
