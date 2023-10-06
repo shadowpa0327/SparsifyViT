@@ -586,6 +586,8 @@ def main(args):
                 test_config = [nas_test_config for _ in range(48)]
                 model_without_ddp.set_sample_config(test_config)
 
+            print(f'{nas_test_config} flops: {model_without_ddp.flops()}')
+
             test_stats = evaluate(data_loader_val, model, device)
             print(f"Accuracy of the {nas_test_config} subnet on the {len(dataset_val)} test images: {test_stats['acc1']:.3f}%")
 
